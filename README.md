@@ -18,14 +18,14 @@ These are working samples meant for local/dev and partner integration — not ha
 | Path | Auth role | Service | Direction |
 |------|-----------|---------|-----------|
 | Bundles | `VALIDATOR` | `block_engine.BlockEngineValidator` | You → validator |
-| Post-pack | `RELAYER` | `block_engine.BlockEngineRelayer` | Validator → you |
+| Post-pack | `RELAYER` | `block_engine.BlockEngineRelayer` (+ discovery via `BlockEngineValidator.GetBlockEngineEndpoints`) | Validator → you |
 | Both | — | `auth.AuthService` | Challenge → bearer token |
 
 Run one binary if you only need that path. Same advertised URL for both paths needs **both** binaries behind one listener (or your own server that exposes Auth + Validator + Relayer together).
 
 ---
 
-## 2. Discovery vs regioned endpoints (bundles)
+## 2. Discovery vs regioned endpoints
 
 You do **not** manually register each regional URL with Rakurai. You register **one discovery URL**; your server advertises regions in the RPC response.
 
@@ -34,34 +34,25 @@ You do **not** manually register each regional URL with Rakurai. You register **
 | Discovery URL | **Yes** — share once | Stored on-chain; validators dial this first |
 | `global_endpoint` / `regioned_endpoints` | **No** — you return them | Validator probes regions, reconnects to lowest-latency |
 
-Flow:
+### Bundles
 
-1. Run `bundles_server` (or your engine) with Auth + `BlockEngineValidator`.
+1. Run `bundles_server` with Auth + `BlockEngineValidator`.
 2. Share the discovery URL with Rakurai (e.g. `http://api.example.com:2345`).
 3. Validator → discovery → `GetBlockEngineEndpoints` → your list of URLs.
 4. Validator ranks `regioned_endpoints` by latency (falls back to `global_endpoint`).
 5. Validator reconnects to the chosen `block_engine_url` for `SubscribePackets` / `SubscribeBundles`.
 
-### Where you add multiple regions
+Edit **`get_block_engine_endpoints`** in [`bundles_server/src/main.rs`](./bundles_server/src/main.rs). The sample fills `regioned_endpoints` from `--public-url` only. For multi-region, put every regional URL in that `vec`. Redeploy discovery after changing it. Each listed host must run Auth + Validator gRPC.
 
-Edit **`get_block_engine_endpoints`** in [`bundles_server/src/main.rs`](./bundles_server/src/main.rs) (or the same RPC in your own server). The sample fills `regioned_endpoints` from `--public-url` only. For multi-region, put every regional URL in that `vec`:
+### P2C (same discovery RPC)
 
-```rust
-regioned_endpoints: vec![
-    BlockEngineEndpoint {
-        block_engine_url: "https://fra.example.com".into(),
-        shredstream_receiver_address: String::new(),
-    },
-    BlockEngineEndpoint {
-        block_engine_url: "https://nyc.example.com".into(),
-        shredstream_receiver_address: String::new(),
-    },
-],
-```
+`p2c_server` also implements `GetBlockEngineEndpoints` (Validator service, discovery-only; packet/bundle subscribe RPCs return `UNIMPLEMENTED`). Pass `--public-url` the same way as bundles. Validators use that response for P2C autoconfig, then open Relayer streams on the chosen host:
 
-There is no CLI flag, client-config field, or Rakurai form for the regional list — only this response. Redeploy discovery after changing it. Each listed host must run Auth + Validator gRPC.
-
-P2C has no discovery/region list: you share the Relayer listen URL; validators open `StartExpiringPacketStream` on that host.
+| Relayer RPC | Default | Opt out |
+|-------------|---------|---------|
+| `StartExpiringPacketStream` | always on | — |
+| `StartExpiringTpuPacketStream` | on | `--disable-tpu-packet-stream` |
+| `StartP2cUpdateCountStream` | on | `--disable-p2c-update-count` |
 
 ---
 
@@ -86,7 +77,8 @@ P2C:
 
 ```bash
 RUST_LOG=info cargo run --release -p p2c_server -- \
-  --bind 0.0.0.0:10001
+  --bind 0.0.0.0:10001 \
+  --public-url http://<HOST_IP>:10001
 ```
 
 ---
@@ -102,13 +94,28 @@ Default allowlist: on `getLeaderSchedule` **and** `getClusterNodes` with Rakurai
 | Flag | Default | Applies to | Purpose |
 |------|---------|------------|---------|
 | `--bind` | `0.0.0.0:10000` (`10001` for `p2c_server`) | all | gRPC listen address |
-| `--public-url` | *(set for remote validators)* | `bundles_server` | URL from `GetBlockEngineEndpoints` |
+| `--public-url` | *(set for remote validators)* | `bundles_server`, `p2c_server` | URL from `GetBlockEngineEndpoints` |
 | `--rpc-url` (`RPC_URL`) | mainnet-beta public RPC | all | Allowlist + latest blockhash |
 | `--leader-refresh-secs` | `120` | all | Allowlist refresh interval |
+| `--disable-tpu-packet-stream` | false | `p2c_server` | Disable TPU packet Relayer RPC |
+| `--disable-p2c-update-count` | false | `p2c_server` | Disable per-slot count Relayer RPC |
 
 ---
 
-## 6. Layout
+## 6. What changed recently (P2C)
+
+| Change | Why it matters |
+|--------|----------------|
+| `GetBlockEngineEndpoints` on `p2c_server` | Same discovery / region ranking as bundles; set `--public-url` |
+| `StartExpiringTpuPacketStream` | Separate stream for TPU packets (default on; `--disable-tpu-packet-stream` to refuse) |
+| `StartP2cUpdateCountStream` | Per-slot send counts from the validator (default on; `--disable-p2c-update-count` to refuse) |
+| `expiry_ms` = slot | On P2C batches, field carries working-bank slot as `u32` |
+
+Validators tolerate `UNIMPLEMENTED` on the optional TPU and count RPCs and keep the scheduler stream.
+
+---
+
+## 7. Layout
 
 | Crate | Role |
 |-------|------|

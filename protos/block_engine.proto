@@ -42,8 +42,7 @@ message ProgramsOfInterestUpdate {
 
 // A series of packets with an expiration attached to them.
 // The header contains a timestamp for when this packet was generated.
-// The expiry is how long the packet batches have before they expire and are forwarded to the validator.
-// This provides a more censorship resistant method to MEV than block engines receiving packets directly.
+// On the P2C path, expiry_ms carries the working-bank slot as u32 (not a millisecond expiry).
 message ExpiringPacketBatch {
   shared.Header header = 1;
   packet.PacketBatch batch = 2;
@@ -64,6 +63,16 @@ message PacketBatchUpdate {
 
 message StartExpiringPacketStreamResponse {
   shared.Heartbeat heartbeat = 1;
+}
+
+// Per-slot P2C send counts (validator → consumer).
+message P2cUpdateCount {
+  string uuid = 1;
+  uint64 slot = 2;
+  uint64 scheduler_count = 3;
+  uint64 tpu_count = 4;
+  uint64 total_count = 5;
+  bool p2c_tpu_enabled = 6;
 }
 
 // Request a list of block engine endpoints to communicate with.
@@ -97,6 +106,7 @@ service BlockEngineValidator {
   rpc GetBlockBuilderFeeInfo (BlockBuilderFeeInfoRequest) returns (BlockBuilderFeeInfoResponse) {}
 
   // Get list of Block Engine Endpoints (global and regioned) to find the optimal region.
+  // Also used by P2C autoconfig against the Relayer host.
   rpc GetBlockEngineEndpoints (GetBlockEngineEndpointRequest) returns (GetBlockEngineEndpointResponse) {}
 }
 
@@ -110,10 +120,12 @@ service BlockEngineRelayer {
 
   rpc SubscribeProgramsOfInterest (ProgramsOfInterestRequest) returns (stream ProgramsOfInterestUpdate) {}
 
-  // Validators can subscribe to packets from the relayer and receive a multiplexed signal that contains a mixture
-  // of packets and heartbeats.
-  // NOTE: This is a bi-directional stream due to a bug with how Envoy handles half closed client-side streams.
-  // The issue is being tracked here: https://github.com/envoyproxy/envoy/issues/22748. In the meantime, the
-  // server will stream heartbeats to clients at some reasonable cadence.
+  // Scheduler / post-pack updates (bi-directional for Envoy half-close workaround).
   rpc StartExpiringPacketStream (stream PacketBatchUpdate) returns (stream StartExpiringPacketStreamResponse) {}
+
+  // TPU / sigverify packets (same message types). Optional: return UNIMPLEMENTED to disable.
+  rpc StartExpiringTpuPacketStream (stream PacketBatchUpdate) returns (stream StartExpiringPacketStreamResponse) {}
+
+  // Per-slot send counts. Optional: return UNIMPLEMENTED to disable.
+  rpc StartP2cUpdateCountStream (stream P2cUpdateCount) returns (stream StartExpiringPacketStreamResponse) {}
 }

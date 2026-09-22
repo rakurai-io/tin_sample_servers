@@ -53,10 +53,11 @@ pub fn packet_bytes(packet: &Packet) -> &[u8] {
 }
 
 /// Decode + log each P2C packet; returns the original packets (unchanged).
-pub fn log_p2c_batch(batch: &ExpiringPacketBatch) -> Vec<Packet> {
+/// `source` labels the stream (`scheduler` or `tpu`). `expiry_ms` is the slot on the P2C path.
+pub fn log_p2c_batch(batch: &ExpiringPacketBatch, source: &str) -> Vec<Packet> {
     let Some(packet_batch) = batch.batch.as_ref() else {
         warn!(
-            "P2C-Update: PacketBatchUpdate with no packets expiry_ms={}",
+            "P2C-Update[{source}]: PacketBatchUpdate with no packets slot/expiry_ms={}",
             batch.expiry_ms
         );
         return Vec::new();
@@ -71,11 +72,14 @@ pub fn log_p2c_batch(batch: &ExpiringPacketBatch) -> Vec<Packet> {
                     .first()
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| "<no-signature>".to_string());
-                info!("P2C-Update: transaction signature={sig}");
+                info!(
+                    "P2C-Update[{source}]: slot={} signature={sig}",
+                    batch.expiry_ms
+                );
                 out.push(packet.clone());
             }
             Err(err) => warn!(
-                "P2C-Update: failed to deserialize packet ({} bytes): {err}",
+                "P2C-Update[{source}]: failed to deserialize packet ({} bytes): {err}",
                 packet_bytes(packet).len()
             ),
         }
