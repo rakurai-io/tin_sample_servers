@@ -4,7 +4,7 @@
 
 On each new validator subscription the sample builds a tip-only dummy bundle (`Keypair::new()` payer, 0.001 SOL to a Rakurai tip account) and streams it over `SubscribeBundles`. Swap that helper for your real searcher output when integrating.
 
-Does **not** serve the Relayer/P2C path — use [`p2c_server`](../p2c_server/) for that.
+Does **not** serve the Relayer / P2C path — use [`p2c_server`](../p2c_server/) for that.
 
 **Related:** [Repository overview](../README.md) · [Setup guide](https://docs.rakurai.io/docs/services/rakurai_jito_private/rakurai_docs/transaction_inclusion/setup_guide)
 
@@ -17,7 +17,7 @@ Does **not** serve the Relayer/P2C path — use [`p2c_server`](../p2c_server/) f
 | `auth.AuthService` | `VALIDATOR` | challenge / tokens |
 | `block_engine.BlockEngineValidator` | `VALIDATOR` | `SubscribePackets`, `SubscribeBundles`, `GetBlockEngineEndpoints` |
 
-`GetBlockEngineEndpoints` is discovery: Rakurai registers **this host’s URL** on-chain once. You return `global_endpoint` + `regioned_endpoints` from the handler — validators pick the lowest-latency region. You do **not** register each region separately with Rakurai. See [Discovery vs regioned endpoints](../README.md#2-discovery-vs-regioned-endpoints-bundles).
+`GetBlockEngineEndpoints` is discovery: Rakurai registers **this host’s URL** on-chain once. You return `global_endpoint` + `regioned_endpoints` from the handler — validators pick the lowest-latency region. You do **not** register each region separately with Rakurai. See [Discovery vs regioned endpoints](../README.md#2-discovery-vs-regioned-endpoints).
 
 ### How to add multiple regions
 
@@ -33,4 +33,4 @@ RUST_LOG=info cargo run --release -p bundles_server -- \
   --public-url http://<HOST_IP>:10000
 ```
 
-`--bind` can be `0.0.0.0`; `--public-url` must be a host validators can connect (not loopback / `0.0.0.0`). Dummy bundles use `Keypair::new()`.
+`--bind` can be `0.0.0.0`; `--public-url` must be a host validators can connect to (not loopback / `0.0.0.0`). Dummy bundles use `Keypair::new()`.

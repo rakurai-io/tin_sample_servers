@@ -1,8 +1,8 @@
 # TIN sample servers
 
-**Reference gRPC servers for Rakurai TIN partners.** After you register a public URL with Rakurai, opted-in validators discover and connect to your endpoint over the TIN gRPC API. The crates show the minimum setup you need for the two TIN paths: pushing bundles into the validator, and consuming post-pack (P2C) streams for backruns.
+**Reference gRPC servers for Rakurai TIN partners.** After you register a public URL with Rakurai, opted-in validators discover and connect to your endpoint over the TIN gRPC API. These crates show the minimum setup for the two TIN paths: pushing bundles into the validator, and consuming post-pack (P2C) streams for backruns.
 
-These are working samples meant for local/dev and partner integration — not hardened production services. Copy the auth + service wiring, then replace dummy tip bundles and signature logging with your own searcher or backrun logic.
+Working samples for local/dev and partner integration — not hardened production services. Copy the auth + service wiring, then replace dummy tip bundles and signature logging with your own searcher or backrun logic.
 
 **Audience:** TIN partners building a block engine (bundles) and/or a post-pack (P2C) consumer.
 
@@ -18,14 +18,14 @@ These are working samples meant for local/dev and partner integration — not ha
 | Path | Auth role | Service | Direction |
 |------|-----------|---------|-----------|
 | Bundles | `VALIDATOR` | `block_engine.BlockEngineValidator` | You → validator |
-| Post-pack | `RELAYER` | `block_engine.BlockEngineRelayer` | Validator → you |
+| Post-pack | `RELAYER` | `block_engine.BlockEngineRelayer` (+ discovery via `BlockEngineValidator.GetBlockEngineEndpoints`) | Validator → you |
 | Both | — | `auth.AuthService` | Challenge → bearer token |
 
 Run one binary if you only need that path. Same advertised URL for both paths needs **both** binaries behind one listener (or your own server that exposes Auth + Validator + Relayer together).
 
 ---
 
-## 2. Discovery vs regioned endpoints (bundles)
+## 2. Discovery vs regioned endpoints
 
 You do **not** manually register each regional URL with Rakurai. You register **one discovery URL**; your server advertises regions in the RPC response.
 
@@ -34,34 +34,29 @@ You do **not** manually register each regional URL with Rakurai. You register **
 | Discovery URL | **Yes** — share once | Stored on-chain; validators dial this first |
 | `global_endpoint` / `regioned_endpoints` | **No** — you return them | Validator probes regions, reconnects to lowest-latency |
 
-Flow:
+### Bundles
 
-1. Run `bundles_server` (or your engine) with Auth + `BlockEngineValidator`.
+1. Run `bundles_server` with Auth + `BlockEngineValidator`.
 2. Share the discovery URL with Rakurai (e.g. `http://api.example.com:2345`).
 3. Validator → discovery → `GetBlockEngineEndpoints` → your list of URLs.
 4. Validator ranks `regioned_endpoints` by latency (falls back to `global_endpoint`).
 5. Validator reconnects to the chosen `block_engine_url` for `SubscribePackets` / `SubscribeBundles`.
 
-### Where you add multiple regions
+Edit **`get_block_engine_endpoints`** in [`bundles_server/src/main.rs`](./bundles_server/src/main.rs). The sample fills `regioned_endpoints` from `--public-url` only. For multi-region, put every regional URL in that `vec`. Redeploy discovery after changing it. Each listed host must run Auth + Validator gRPC.
 
-Edit **`get_block_engine_endpoints`** in [`bundles_server/src/main.rs`](./bundles_server/src/main.rs) (or the same RPC in your own server). The sample fills `regioned_endpoints` from `--public-url` only. For multi-region, put every regional URL in that `vec`:
+### P2C (same discovery RPC)
 
-```rust
-regioned_endpoints: vec![
-    BlockEngineEndpoint {
-        block_engine_url: "https://fra.example.com".into(),
-        shredstream_receiver_address: String::new(),
-    },
-    BlockEngineEndpoint {
-        block_engine_url: "https://nyc.example.com".into(),
-        shredstream_receiver_address: String::new(),
-    },
-],
-```
+`p2c_server` also implements `GetBlockEngineEndpoints` (Validator service, discovery-only; packet/bundle subscribe RPCs return `UNIMPLEMENTED`). Pass `--public-url` the same way as bundles. Validators use that response for P2C autoconfig, then open Relayer streams on the chosen host:
 
-There is no CLI flag, client-config field, or Rakurai form for the regional list — only this response. Redeploy discovery after changing it. Each listed host must run Auth + Validator gRPC.
+| Relayer RPC | Default | Opt out | What it delivers |
+|-------------|---------|---------|------------------|
+| `StartExpiringPacketStream` | always on | — | Point-of-no-return transactions while this validator is the leader |
+| `StartExpiringTpuPacketStream` | on | `--disable-tpu-packet-stream` | Transactions seen on TPU while this validator is **not** the leader |
+| `StartP2cUpdateCountStream` | on | `--disable-p2c-update-count` | Once per slot: how many transactions were successfully sent on the scheduler and TPU streams |
 
-P2C has no discovery/region list: you share the Relayer listen URL; validators open `StartExpiringPacketStream` on that host.
+**Scheduler vs TPU:** both streams send the same `PacketBatchUpdate` message type. There is no `source` field on the packet — tell them apart by **which gRPC method** delivered the message. The sample logs `P2C-Update[scheduler]` / `P2C-Update[tpu]` from the handler that accepted the stream. `meta.addr` also differs (scheduler string vs validator identity signature). Details: [`p2c_server` README §2](./p2c_server/README.md#2-differentiating-scheduler-vs-tpu).
+
+**`expiry_ms`:** despite the name, on the P2C path this field holds the validator’s **working-bank slot** (`u32`), not a millisecond timeout. The count stream carries the same slot in `P2cUpdateCount.slot`. Details: [`p2c_server` README §3](./p2c_server/README.md#3-slot-on-the-wire-expiry_ms).
 
 ---
 
@@ -86,7 +81,8 @@ P2C:
 
 ```bash
 RUST_LOG=info cargo run --release -p p2c_server -- \
-  --bind 0.0.0.0:10001
+  --bind 0.0.0.0:10001 \
+  --public-url http://<HOST_IP>:10001
 ```
 
 ---
@@ -102,13 +98,30 @@ Default allowlist: on `getLeaderSchedule` **and** `getClusterNodes` with Rakurai
 | Flag | Default | Applies to | Purpose |
 |------|---------|------------|---------|
 | `--bind` | `0.0.0.0:10000` (`10001` for `p2c_server`) | all | gRPC listen address |
-| `--public-url` | *(set for remote validators)* | `bundles_server` | URL from `GetBlockEngineEndpoints` |
+| `--public-url` | *(set for remote validators)* | `bundles_server`, `p2c_server` | URL returned by `GetBlockEngineEndpoints` |
 | `--rpc-url` (`RPC_URL`) | mainnet-beta public RPC | all | Allowlist + latest blockhash |
 | `--leader-refresh-secs` | `120` | all | Allowlist refresh interval |
+| `--allow-any-validator` | false | all | Skip allowlist (local / lab only) |
+| `--disable-tpu-packet-stream` | false | `p2c_server` | Reject the TPU packet Relayer RPC (`UNIMPLEMENTED`) |
+| `--disable-p2c-update-count` | false | `p2c_server` | Reject the per-slot count Relayer RPC (`UNIMPLEMENTED`) |
 
 ---
 
-## 6. Layout
+## 6. What changed recently (P2C)
+
+| Change | Why it matters |
+|--------|----------------|
+| `GetBlockEngineEndpoints` on `p2c_server` | Same discovery / region ranking as bundles; set `--public-url` |
+| `StartExpiringTpuPacketStream` | Separate stream for TPU-path transactions (default on; `--disable-tpu-packet-stream` to refuse) |
+| `StartP2cUpdateCountStream` | Per-slot counts of transactions sent on the scheduler and TPU streams (default on; `--disable-p2c-update-count` to refuse) |
+| `expiry_ms` holds the slot | Field name is historical (Jito wire); on P2C batches the value is the working-bank slot as `u32`, not a TTL in milliseconds |
+| Source in logs | Sample tags batches `scheduler` vs `tpu` from the RPC handler that accepted the stream; see also `meta.addr` |
+
+Validators tolerate `UNIMPLEMENTED` on the optional TPU and count RPCs and keep the scheduler stream. Full notes: [`p2c_server` README](./p2c_server/README.md).
+
+---
+
+## 7. Layout
 
 | Crate | Role |
 |-------|------|
