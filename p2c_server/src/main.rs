@@ -259,8 +259,9 @@ impl BlockEngineRelayer for BlockEngineRelayerImpl {
                 match msg {
                     Ok(count) => {
                         info!(
-                            "P2C-UpdateCount: uuid={} slot={} scheduler_count={} tpu_count={} \
-                             total_count={} p2c_tpu_enabled={}",
+                            "P2C-UpdateCount: validator={} uuid={} slot={} scheduler_count={} \
+                             tpu_count={} total_count={} p2c_tpu_enabled={}",
+                            ctx.pubkey,
                             count.uuid,
                             count.slot,
                             count.scheduler_count,
@@ -305,7 +306,7 @@ async fn serve_packet_stream(
             match msg {
                 Ok(PacketBatchUpdate { msg: Some(m) }) => match m {
                     protos::block_engine::packet_batch_update::Msg::Batches(batch) => {
-                        let _packets = log_p2c_batch(&batch, source);
+                        let _packets = log_p2c_batch(&batch, source, &ctx.pubkey);
                         // Replace with your backrun / reply-bundle logic.
                     }
                     protos::block_engine::packet_batch_update::Msg::Heartbeat(hb) => {

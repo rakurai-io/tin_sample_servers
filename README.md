@@ -54,6 +54,10 @@ Edit **`get_block_engine_endpoints`** in [`bundles_server/src/main.rs`](./bundle
 | `StartExpiringTpuPacketStream` | on | `--disable-tpu-packet-stream` |
 | `StartP2cUpdateCountStream` | on | `--disable-p2c-update-count` |
 
+**Differentiate scheduler vs TPU:** by **which RPC** you accepted (sample logs `P2C-Update[scheduler]` / `P2C-Update[tpu]`). Wire shape is identical; `meta.addr` also differs (scheduler string vs validator identity signature). Details: [`p2c_server` README §2](./p2c_server/README.md#2-differentiating-scheduler-vs-tpu).
+
+**Slot:** on each batch, `expiry_ms` is the working-bank **slot** (`u32`), not a millisecond expiry. Count stream carries the same slot in `P2cUpdateCount.slot`. Details: [`p2c_server` README §3](./p2c_server/README.md#3-slot-on-the-wire-expiry_ms--what-and-why).
+
 ---
 
 ## 3. Quick start
@@ -109,9 +113,10 @@ Default allowlist: on `getLeaderSchedule` **and** `getClusterNodes` with Rakurai
 | `GetBlockEngineEndpoints` on `p2c_server` | Same discovery / region ranking as bundles; set `--public-url` |
 | `StartExpiringTpuPacketStream` | Separate stream for TPU packets (default on; `--disable-tpu-packet-stream` to refuse) |
 | `StartP2cUpdateCountStream` | Per-slot send counts from the validator (default on; `--disable-p2c-update-count` to refuse) |
-| `expiry_ms` = slot | On P2C batches, field carries working-bank slot as `u32` |
+| `expiry_ms` = slot | On P2C batches, field carries working-bank slot as `u32` (not a TTL) |
+| Source in logs | Sample tags batches `scheduler` vs `tpu` from the RPC handler; see also `meta.addr` |
 
-Validators tolerate `UNIMPLEMENTED` on the optional TPU and count RPCs and keep the scheduler stream.
+Validators tolerate `UNIMPLEMENTED` on the optional TPU and count RPCs and keep the scheduler stream. Full differentiate + slot notes: [`p2c_server` README](./p2c_server/README.md).
 
 ---
 

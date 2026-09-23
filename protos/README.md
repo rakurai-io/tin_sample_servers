@@ -20,6 +20,7 @@ Modules: `protos::auth`, `protos::block_engine`, …
 | `StartExpiringTpuPacketStream` | TPU packets; optional (`UNIMPLEMENTED` ok) |
 | `StartP2cUpdateCountStream` | Per-slot counts; optional (`UNIMPLEMENTED` ok) |
 
-`P2cUpdateCount`: `uuid`, `slot`, `scheduler_count`, `tpu_count`, `total_count`, `p2c_tpu_enabled`.  
-On P2C batches, `ExpiringPacketBatch.expiry_ms` carries the slot as `u32`.
+`P2cUpdateCount`: `uuid`, `slot`, `scheduler_count`, `tpu_count`, `total_count`, `p2c_tpu_enabled`.
+
+On P2C batches, `ExpiringPacketBatch.expiry_ms` carries the **working-bank slot** as `u32` (not a millisecond expiry). Differentiate scheduler vs TPU by **which Relayer RPC** accepted the stream (wire msgs are identical); `meta.addr` also differs — see [`p2c_server` README](../p2c_server/README.md#2-differentiating-scheduler-vs-tpu).
 
