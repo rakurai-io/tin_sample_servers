@@ -1,8 +1,8 @@
 # TIN sample servers
 
-**Reference gRPC servers for Rakurai TIN partners.** After you register a public URL with Rakurai, opted-in validators discover and connect to your endpoint over the TIN gRPC API. The crates show the minimum setup you need for the two TIN paths: pushing bundles into the validator, and consuming post-pack (P2C) streams for backruns.
+**Reference gRPC servers for Rakurai TIN partners.** After you register a public URL with Rakurai, opted-in validators discover and connect to your endpoint over the TIN gRPC API. These crates show the minimum setup for the two TIN paths: pushing bundles into the validator, and consuming post-pack (P2C) streams for backruns.
 
-These are working samples meant for local/dev and partner integration — not hardened production services. Copy the auth + service wiring, then replace dummy tip bundles and signature logging with your own searcher or backrun logic.
+Working samples for local/dev and partner integration — not hardened production services. Copy the auth + service wiring, then replace dummy tip bundles and signature logging with your own searcher or backrun logic.
 
 **Audience:** TIN partners building a block engine (bundles) and/or a post-pack (P2C) consumer.
 
@@ -48,15 +48,15 @@ Edit **`get_block_engine_endpoints`** in [`bundles_server/src/main.rs`](./bundle
 
 `p2c_server` also implements `GetBlockEngineEndpoints` (Validator service, discovery-only; packet/bundle subscribe RPCs return `UNIMPLEMENTED`). Pass `--public-url` the same way as bundles. Validators use that response for P2C autoconfig, then open Relayer streams on the chosen host:
 
-| Relayer RPC | Default | Opt out |
-|-------------|---------|---------|
-| `StartExpiringPacketStream` | always on | — |
-| `StartExpiringTpuPacketStream` | on | `--disable-tpu-packet-stream` |
-| `StartP2cUpdateCountStream` | on | `--disable-p2c-update-count` |
+| Relayer RPC | Default | Opt out | What it delivers |
+|-------------|---------|---------|------------------|
+| `StartExpiringPacketStream` | always on | — | Point-of-no-return transactions while this validator is the leader |
+| `StartExpiringTpuPacketStream` | on | `--disable-tpu-packet-stream` | Transactions seen on TPU while this validator is **not** the leader |
+| `StartP2cUpdateCountStream` | on | `--disable-p2c-update-count` | Once per slot: how many transactions were successfully sent on the scheduler and TPU streams |
 
-**Differentiate scheduler vs TPU:** by **which RPC** you accepted (sample logs `P2C-Update[scheduler]` / `P2C-Update[tpu]`). Wire shape is identical; `meta.addr` also differs (scheduler string vs validator identity signature). Details: [`p2c_server` README §2](./p2c_server/README.md#2-differentiating-scheduler-vs-tpu).
+**Scheduler vs TPU:** both streams send the same `PacketBatchUpdate` message type. There is no `source` field on the packet — tell them apart by **which gRPC method** delivered the message. The sample logs `P2C-Update[scheduler]` / `P2C-Update[tpu]` from the handler that accepted the stream. `meta.addr` also differs (scheduler string vs validator identity signature). Details: [`p2c_server` README §2](./p2c_server/README.md#2-differentiating-scheduler-vs-tpu).
 
-**Slot:** on each batch, `expiry_ms` is the working-bank **slot** (`u32`), not a millisecond expiry. Count stream carries the same slot in `P2cUpdateCount.slot`. Details: [`p2c_server` README §3](./p2c_server/README.md#3-slot-on-the-wire-expiry_ms--what-and-why).
+**`expiry_ms`:** despite the name, on the P2C path this field holds the validator’s **working-bank slot** (`u32`), not a millisecond timeout. The count stream carries the same slot in `P2cUpdateCount.slot`. Details: [`p2c_server` README §3](./p2c_server/README.md#3-slot-on-the-wire-expiry_ms).
 
 ---
 
@@ -98,11 +98,12 @@ Default allowlist: on `getLeaderSchedule` **and** `getClusterNodes` with Rakurai
 | Flag | Default | Applies to | Purpose |
 |------|---------|------------|---------|
 | `--bind` | `0.0.0.0:10000` (`10001` for `p2c_server`) | all | gRPC listen address |
-| `--public-url` | *(set for remote validators)* | `bundles_server`, `p2c_server` | URL from `GetBlockEngineEndpoints` |
+| `--public-url` | *(set for remote validators)* | `bundles_server`, `p2c_server` | URL returned by `GetBlockEngineEndpoints` |
 | `--rpc-url` (`RPC_URL`) | mainnet-beta public RPC | all | Allowlist + latest blockhash |
 | `--leader-refresh-secs` | `120` | all | Allowlist refresh interval |
-| `--disable-tpu-packet-stream` | false | `p2c_server` | Disable TPU packet Relayer RPC |
-| `--disable-p2c-update-count` | false | `p2c_server` | Disable per-slot count Relayer RPC |
+| `--allow-any-validator` | false | all | Skip allowlist (local / lab only) |
+| `--disable-tpu-packet-stream` | false | `p2c_server` | Reject the TPU packet Relayer RPC (`UNIMPLEMENTED`) |
+| `--disable-p2c-update-count` | false | `p2c_server` | Reject the per-slot count Relayer RPC (`UNIMPLEMENTED`) |
 
 ---
 
@@ -111,12 +112,12 @@ Default allowlist: on `getLeaderSchedule` **and** `getClusterNodes` with Rakurai
 | Change | Why it matters |
 |--------|----------------|
 | `GetBlockEngineEndpoints` on `p2c_server` | Same discovery / region ranking as bundles; set `--public-url` |
-| `StartExpiringTpuPacketStream` | Separate stream for TPU packets (default on; `--disable-tpu-packet-stream` to refuse) |
-| `StartP2cUpdateCountStream` | Per-slot send counts from the validator (default on; `--disable-p2c-update-count` to refuse) |
-| `expiry_ms` = slot | On P2C batches, field carries working-bank slot as `u32` (not a TTL) |
-| Source in logs | Sample tags batches `scheduler` vs `tpu` from the RPC handler; see also `meta.addr` |
+| `StartExpiringTpuPacketStream` | Separate stream for TPU-path transactions (default on; `--disable-tpu-packet-stream` to refuse) |
+| `StartP2cUpdateCountStream` | Per-slot counts of transactions sent on the scheduler and TPU streams (default on; `--disable-p2c-update-count` to refuse) |
+| `expiry_ms` holds the slot | Field name is historical (Jito wire); on P2C batches the value is the working-bank slot as `u32`, not a TTL in milliseconds |
+| Source in logs | Sample tags batches `scheduler` vs `tpu` from the RPC handler that accepted the stream; see also `meta.addr` |
 
-Validators tolerate `UNIMPLEMENTED` on the optional TPU and count RPCs and keep the scheduler stream. Full differentiate + slot notes: [`p2c_server` README](./p2c_server/README.md).
+Validators tolerate `UNIMPLEMENTED` on the optional TPU and count RPCs and keep the scheduler stream. Full notes: [`p2c_server` README](./p2c_server/README.md).
 
 ---
 
