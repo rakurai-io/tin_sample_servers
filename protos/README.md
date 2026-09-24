@@ -1,25 +1,27 @@
 # `protos`
 
-Vendored `.proto` schemas + tonic codegen. Keep wire names unchanged (validator-compatible).
+**Purpose.** Wire schemas the sample servers compile against so message and RPC names match what Rakurai validators expect.
 
-| File | Used for |
-|------|----------|
-| `auth.proto` | Challenge / tokens |
-| `block_engine.proto` | Validator + Relayer services (incl. P2C TPU stream, update-count, discovery) |
+**What it does.** Vendors `.proto` files and generates tonic stubs. Keep names unchanged — renaming breaks the validator connection.
+
+| File | Purpose |
+|------|---------|
+| `auth.proto` | Challenge / tokens (`AuthService`) |
+| `block_engine.proto` | Discovery + Validator/Relayer (P2C streams, counts) |
 | `bundle.proto` | Bundle messages |
 | `packet.proto` | `Packet` / `PacketBatch` |
 | `shared.proto` | `Heartbeat`, `Header` |
 
 Modules: `protos::auth`, `protos::block_engine`, …
 
-### Relayer (P2C) RPCs in `block_engine.proto`
+### Relayer (P2C) RPCs
 
-| RPC | Notes |
-|-----|--------|
-| `StartExpiringPacketStream` | Point-of-no-return / scheduler path (required for P2C) |
-| `StartExpiringTpuPacketStream` | TPU path; optional (`UNIMPLEMENTED` is fine) |
-| `StartP2cUpdateCountStream` | Once per slot: counts of transactions sent on the scheduler and TPU streams; optional (`UNIMPLEMENTED` is fine) |
+| RPC | Purpose |
+|-----|---------|
+| `StartExpiringPacketStream` | Leader-time / post-pack updates (required) |
+| `StartExpiringTpuPacketStream` | Non-leader TPU updates; optional (`UNIMPLEMENTED` ok). In production, **MCA** path (**PSA included**) |
+| `StartP2cUpdateCountStream` | Per-slot send counts; optional (`UNIMPLEMENTED` ok) |
 
-`P2cUpdateCount` fields: `uuid`, `slot`, `scheduler_count`, `tpu_count`, `total_count`, `p2c_tpu_enabled`.
+`P2cUpdateCount`: `uuid`, `slot`, `scheduler_count`, `tpu_count`, `total_count`, `p2c_tpu_enabled`.
 
-On P2C batches, `ExpiringPacketBatch.expiry_ms` is named for Jito wire compatibility but holds the **working-bank slot** as `u32` — not a millisecond timeout. Scheduler vs TPU: same wire messages; tell them apart by **which Relayer gRPC method** accepted the stream. `meta.addr` also differs — see [`p2c_server` README](../p2c_server/README.md#2-differentiating-scheduler-vs-tpu).
+`ExpiringPacketBatch.expiry_ms` holds the **working-bank slot** (`u32`), not a millisecond timeout. Scheduler vs TPU: same wire messages — tell them apart by which Relayer method accepted the stream. Details: [`p2c_server` README](../p2c_server/README.md#2-differentiating-scheduler-vs-tpu).

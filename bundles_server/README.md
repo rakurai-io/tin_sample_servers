@@ -1,12 +1,10 @@
 # `bundles_server`
 
-**Bundles-only sample.** Implements the TIN block-engine path: validators authenticate with role `VALIDATOR`, call `GetBlockEngineEndpoints` to get your advertised URL, then subscribe for packets and bundles you push downstream.
+**Purpose.** Sample block-engine server so you can send bundles to Rakurai validators over the TIN.
 
-On each new validator subscription the sample builds a tip-only dummy bundle (`Keypair::new()` payer, 0.001 SOL to a Rakurai tip account) and streams it over `SubscribeBundles`. Swap that helper for your real searcher output when integrating.
+**What it does.** Validators auth as `VALIDATOR`, call `GetBlockEngineEndpoints` for your advertised URL(s), then open subscribe streams. On each new subscription this sample builds a tip-only dummy bundle (`Keypair::new()` payer, **0.001 SOL** to a Rakurai tip account) and streams it on `SubscribeBundles`. Swap that helper for real searcher output. It does **not** serve Relayer / P2C — use [`p2c_server`](../p2c_server/) for that.
 
-Does **not** serve the Relayer / P2C path — use [`p2c_server`](../p2c_server/) for that.
-
-**Related:** [Repository overview](../README.md) · [Setup guide](https://docs.rakurai.io/docs/services/rakurai_jito_private/rakurai_docs/transaction_inclusion/setup_guide)
+**Related:** [Repository overview](../README.md) · [Setup guide](https://docs.rakurai.io/docs/services/rakurai_jito_private/rakurai_docs/transaction_inclusion/setup_guide) · [Tips](https://docs.rakurai.io/docs/services/rakurai_jito_private/rakurai_docs/transaction_inclusion/tips)
 
 ---
 
@@ -17,11 +15,13 @@ Does **not** serve the Relayer / P2C path — use [`p2c_server`](../p2c_server/)
 | `auth.AuthService` | `VALIDATOR` | challenge / tokens |
 | `block_engine.BlockEngineValidator` | `VALIDATOR` | `SubscribePackets`, `SubscribeBundles`, `GetBlockEngineEndpoints` |
 
-`GetBlockEngineEndpoints` is discovery: Rakurai registers **this host’s URL** on-chain once. You return `global_endpoint` + `regioned_endpoints` from the handler — validators pick the lowest-latency region. You do **not** register each region separately with Rakurai. See [Discovery vs regioned endpoints](../README.md#2-discovery-vs-regioned-endpoints).
+### Discovery
 
-### How to add multiple regions
+**Purpose.** Advertise one or more reachable URLs without registering each region on-chain.
 
-In `src/main.rs`, edit `get_block_engine_endpoints`. Default behavior echoes `--public-url` into both fields. Change `regioned_endpoints` to your full list (and set `global_endpoint` to your anycast / primary URL). Redeploy; no extra Rakurai registration.
+**What it does.** Rakurai stores **one discovery URL**. Your handler returns `global_endpoint` + `regioned_endpoints`. Validators pick the lowest-latency URL. Multi-region: implement `GetBlockEngineEndpoints` on **every** host and return the **same full list**. See [Discovery vs regioned endpoints](../README.md#2-discovery-vs-regioned-endpoints).
+
+Edit `get_block_engine_endpoints` in `src/main.rs`. Default echoes `--public-url` into both fields; replace `regioned_endpoints` with your full list for multi-home.
 
 ---
 
@@ -33,4 +33,4 @@ RUST_LOG=info cargo run --release -p bundles_server -- \
   --public-url http://<HOST_IP>:10000
 ```
 
-`--bind` can be `0.0.0.0`; `--public-url` must be a host validators can connect to (not loopback / `0.0.0.0`). Dummy bundles use `Keypair::new()`.
+`--bind` can be `0.0.0.0`; `--public-url` must be a host validators can reach (public URL, not loopback). Dummy bundles use `Keypair::new()`.

@@ -1,10 +1,8 @@
 # `p2c_server`
 
-**Post-pack confirmation (P2C) sample.** Implements the TIN Relayer path: validators authenticate with role `RELAYER` and open packet streams from the point of no return. Also serves `GetBlockEngineEndpoints` on `BlockEngineValidator` so validators can autoconfig / region-rank your P2C URL (same discovery RPC as bundles).
+**Purpose.** Sample Relayer so you can receive Rakurai post-pack (P2C) updates and decoding them before building a production consumer.
 
-The sample parses each batch and logs **validator** (from Relayer auth), **source** (`scheduler` / `tpu` — set by which gRPC method accepted the stream), **slot**, transaction signature, and `meta.addr`. On the TPU stream it also **verifies** `meta.addr`. It does **not** push bundles to validators — use [`bundles_server`](../bundles_server/) for the Validator / block-engine path.
-
-**Related:** [Repository overview](../README.md) · [Setup guide](https://docs.rakurai.io/docs/services/rakurai_jito_private/rakurai_docs/transaction_inclusion/setup_guide) · [Using P2C](https://docs.rakurai.io/docs/services/rakurai_jito_private/rakurai_docs/transaction_inclusion/post_pack/using_p2c)
+**What it does.** Validators auth as `RELAYER`, open packet streams, and push transactions at the point of no return. This binary also serves `GetBlockEngineEndpoints` for region discovery. It logs each batch (validator, scheduler/tpu source, slot, signature, `meta.addr`) and verifies TPU `meta.addr` proofs. It does **not** send bundles — use [`bundles_server`](../bundles_server/) for that.
 
 ---
 
@@ -13,101 +11,102 @@ The sample parses each batch and logs **validator** (from Relayer auth), **sourc
 | Service | Role | RPCs |
 |---------|------|------|
 | `auth.AuthService` | `RELAYER` | challenge / tokens |
-| `block_engine.BlockEngineValidator` | *(unauthenticated discovery)* | `GetBlockEngineEndpoints` (`SubscribePackets` / `SubscribeBundles` return `UNIMPLEMENTED`) |
-| `block_engine.BlockEngineRelayer` | `RELAYER` | `StartExpiringPacketStream` (scheduler), `StartExpiringTpuPacketStream` (TPU), `StartP2cUpdateCountStream` (per-slot counts) |
+| `block_engine.BlockEngineValidator` | discovery | `GetBlockEngineEndpoints` (`SubscribePackets` / `SubscribeBundles` → `UNIMPLEMENTED`) |
+| `block_engine.BlockEngineRelayer` | `RELAYER` | scheduler, TPU, and count streams below |
 
 ### Streams (Relayer)
 
 | RPC | Default | Disable with | What it delivers |
 |-----|---------|--------------|------------------|
-| `StartExpiringPacketStream` | always on | — | Point-of-no-return transactions while this validator is the leader |
-| `StartExpiringTpuPacketStream` | **on** | `--disable-tpu-packet-stream` | Transactions seen on TPU while this validator is **not** the leader (same `PacketBatchUpdate` wire type) |
-| `StartP2cUpdateCountStream` | **on** | `--disable-p2c-update-count` | Once per slot: how many transactions were successfully sent on the scheduler and TPU streams |
+| `StartExpiringPacketStream` | always on | — | Leader-time / post-pack (point of no return) |
+| `StartExpiringTpuPacketStream` | **on** | `--disable-tpu-packet-stream` | Non-leader TPU packets |
+| `StartP2cUpdateCountStream` | **on** | `--disable-p2c-update-count` | Per-slot counts of txs sent on those streams |
 
-When disabled, the RPC returns `UNIMPLEMENTED` so newer validators keep the scheduler stream and skip the optional ones.
+Disabled optional RPCs return `UNIMPLEMENTED`; newer validators keep the scheduler stream.
+
+**Production access (not enforced by this sample):**
+
+| Path | Payment | Streams you get |
+|------|---------|-----------------|
+| Pre-conf / reselling | **PSA** | Leader-time only |
+| Backrun / MevShare | **MCA** (**PSA included**) | Leader-time **+ TPU** |
+
+For local PSA-style testing, run with `--disable-tpu-packet-stream` (and optionally `--disable-p2c-update-count`).
 
 ---
 
 ## 2. Differentiating scheduler vs TPU
 
-Both Relayer streams send the same `PacketBatchUpdate` message type. There is no `source` field on the packet. Tell the paths apart as follows.
+**Purpose.** Know whether an update is leader-time post-pack or earlier TPU traffic.
+
+**What it does.** Both streams send the same `PacketBatchUpdate` type. There is no `source` field on the packet — use the gRPC method that delivered it.
 
 ### 2.1. Primary — which gRPC method delivered the message
 
 | Stream | Sample log label | Meaning |
 |--------|------------------|---------|
 | `StartExpiringPacketStream` | `scheduler` | Post-pack / point of no return for this leader slot |
-| `StartExpiringTpuPacketStream` | `tpu` | Earlier TPU path (validator is not the leader) |
+| `StartExpiringTpuPacketStream` | `tpu` | TPU path (validator is not the leader) |
 
-This sample passes `"scheduler"` or `"tpu"` into `log_p2c_batch` from the handler that accepted the stream. Do **not** look for a packet field named `source`.
+The sample passes `"scheduler"` or `"tpu"` into `log_p2c_batch` from the accepting handler.
 
 ### 2.2. Secondary — `meta` on each packet
 
 | Field | Scheduler | TPU |
 |-------|-----------|-----|
 | `meta.size` | `data.len()` | `data.len()` |
-| `meta.addr` | Per-tx string from the scheduler (**not** an IP) | **Validator identity signature** over the transaction-signature string (proof this leader emitted the update) |
+| `meta.addr` | Per-tx string from the scheduler (**not** an IP) | Validator identity signature over the tx-signature string |
 | `meta.port` | `0` | `0` |
 | `meta.flags` | Omitted / unset | Omitted / unset |
 | `meta.sender_stake` | `0` | `0` |
 
-Treat `meta.addr` as opaque data for proof / correlation — never parse it as a socket address (despite the field name). When you reply with a bundle, put the original `Packet` **unchanged** (`data` + `meta`) first.
+Treat `meta.addr` as opaque proof / correlation data — do not parse it as a socket address. When you reply with a bundle, put the original `Packet` **unchanged** (`data` + `meta`) first.
 
 ### 2.3. Which validator sent the update
 
-Every Relayer stream is authenticated. The sample logs `validator=<identity pubkey>` from the bearer token (`AuthContext.pubkey`) on each batch and count message — that is the validator that opened the stream.
+Streams are authenticated. Logs include `validator=<identity pubkey>` from the bearer token (`AuthContext.pubkey`).
 
 ### 2.4. Verifying TPU `meta.addr`
 
-On the TPU path the validator signs the **transaction signature string** with its identity keypair and puts the proof in `meta.addr`:
-
-1. Decode the packet → first `VersionedTransaction` signature → `txn_sig = signature.to_string()` (base58).
+1. Decode packet → first `VersionedTransaction` signature → `txn_sig = signature.to_string()` (base58).
 2. Parse `meta.addr` as a Solana `Signature` (base58).
-3. `proof.verify(validator_pubkey.as_ref(), txn_sig.as_bytes())` — `validator_pubkey` is the same identity from auth.
+3. `proof.verify(validator_pubkey.as_ref(), txn_sig.as_bytes())`.
 
-The sample does this in `log_p2c_batch` and logs `tpu_proof=ok|bad|missing|bad_encoding`.
+Sample logs `tpu_proof=ok|bad|missing|bad_encoding`. Do **not** run this verify on scheduler `meta.addr`.
 
 ```text
 P2C-Update[scheduler]: validator=<pubkey> slot=… signature=<sig> meta.addr=<scheduler-string>
 P2C-Update[tpu]: validator=<pubkey> slot=… signature=<sig> meta.addr=<proof> tpu_proof=ok
 ```
 
-Scheduler `meta.addr` is **not** an identity proof — do not run the TPU verify path on it.
-
 ---
 
 ## 3. Slot on the wire (`expiry_ms`)
 
-Each `ExpiringPacketBatch` carries a field named `expiry_ms` (kept for Jito wire compatibility):
+**Purpose.** Group updates by the leader slot that produced them.
+
+**What it does.** Field is named `expiry_ms` for Jito wire compatibility. On P2C it holds the validator **working-bank slot** (`u32`), not a millisecond timeout.
 
 ```text
 expiry_ms = <slot as u32>
 ```
 
-| What the value is | What it is **not** |
-|-------------------|--------------------|
-| The validator’s **working-bank slot** when the update was sent | A millisecond expiry / TTL |
-
-Use it to group, debounce, and time reply bundles against the leader slot that produced the update. When the slot rolls, treat it as a new window (same idea as the count stream).
-
 ---
 
 ## 4. `P2cUpdateCount`
 
-When the count stream is enabled, the validator pushes one message **per slot** (and flushes on disconnect). Each message reports how many transactions were successfully sent on the P2C update streams for that slot:
+**Purpose.** Health / volume without counting packets yourself.
+
+**What it does.** One message per slot (flush on disconnect) with how many txs were successfully sent on the scheduler and TPU streams.
 
 | Field | Meaning |
 |-------|---------|
 | `uuid` | Post-pack endpoint UUID |
 | `slot` | Slot these counts belong to |
-| `scheduler_count` | Transactions successfully sent on the scheduler stream that slot |
-| `tpu_count` | Transactions successfully sent on the TPU stream that slot |
+| `scheduler_count` | Txs sent on the scheduler stream that slot |
+| `tpu_count` | Txs sent on the TPU stream that slot |
 | `total_count` | `scheduler_count + tpu_count` |
 | `p2c_tpu_enabled` | Whether TPU updates are enabled for this endpoint |
-
-Use this as a health / volume signal without counting packets yourself — confirm the leader is connected and how much scheduler vs TPU traffic you received that slot.
-
-Sample log:
 
 ```text
 P2C-UpdateCount: validator=… uuid=… slot=… scheduler_count=… tpu_count=… total_count=… p2c_tpu_enabled=…
@@ -126,15 +125,15 @@ RUST_LOG=info cargo run --release -p p2c_server -- \
 | Flag | Default | Purpose |
 |------|---------|---------|
 | `--bind` | `0.0.0.0:10001` | gRPC listen address |
-| `--public-url` | `http://127.0.0.1:10001` | Returned by `GetBlockEngineEndpoints` (must be reachable from validators) |
-| `--disable-tpu-packet-stream` | off | Reject TPU packet stream |
-| `--disable-p2c-update-count` | off | Reject per-slot count stream |
+| `--public-url` | `http://127.0.0.1:10001` | Returned by discovery (use a **public** URL for real validators) |
+| `--disable-tpu-packet-stream` | off | Reject TPU stream |
+| `--disable-p2c-update-count` | off | Reject count stream |
 | `--rpc-url` / `RPC_URL` | mainnet-beta | Leader allowlist |
 | `--allow-any-validator` | false | Skip allowlist (local only) |
 
-Register the **discovery** URL with Rakurai for P2C (same idea as bundles: one URL; you advertise `global_endpoint` / `regioned_endpoints` from this process). Replace signature logging with your backrun / reply-bundle logic.
+Register the discovery URL with Rakurai. Replace logging with your backrun / reply-bundle logic. Backrun bundles that use **leader-time source txs** get an additional **20% virtual priority** on Rakurai.
 
-### Example: scheduler-only (no TPU, no counts)
+### Example: leader-time only (PSA-style / no TPU)
 
 ```bash
 RUST_LOG=info cargo run --release -p p2c_server -- \
