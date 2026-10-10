@@ -16,15 +16,18 @@ Modules: `protos::auth`, `protos::block_engine`, …
 
 ### Relayer (P2C) RPCs
 
-| RPC | Purpose |
-|-----|---------|
-| `StartExpiringPacketStream` | ReSell leader-time / post-pack (no-boost hash). Validators open when `resell` is set. |
-| `StartExpiringMevPacketStream` | Mev leader-time / post-pack (boost hash). Validators open when `mev` is set. |
-| `StartExpiringTpuPacketStream` | Non-leader TPU updates; optional (`UNIMPLEMENTED` ok). Mev + `enable_tpu_p2c_update` in production. |
-| `StartP2cUpdateCountStream` | Per-slot send counts; optional (`UNIMPLEMENTED` ok) |
+| RPC | Stream | Purpose |
+|-----|--------|---------|
+| `StartExpiringMevPacketStream` | **Mev** | Leader-time front-run-proof pre-conf for **backrun**. Validators open when `mev` is set (MCA path). Reply bundles that include the original packet get **20% virtual priority**. |
+| `StartExpiringPacketStream` | **Resell** | Leader-time front-run-proof pre-conf for **reselling**. Validators open when `resell` is set (PSA path). No 20% boost. |
+| `StartExpiringTpuPacketStream` | **TPU** | Non-leader transaction stream for **backrun**; **not** front-run proof, — do not resell. |
+| `StartP2cUpdateCountStream` | Count | Per-slot send counts; optional (`UNIMPLEMENTED` ok) |
 
-One TLS connection per endpoint UUID may multiplex Packet + Mev streams (distinct `meta.addr` hashes) plus optional TPU.
+One TLS connection per endpoint UUID may multiplex Mev + Resell streams (distinct `meta.addr` hashes) plus optional TPU.
 
 `P2cUpdateCount`: `uuid`, `slot`, `scheduler_count`, `tpu_count`, `total_count`, `p2c_tpu_enabled`.
 
-`ExpiringPacketBatch.expiry_ms` holds the **working-bank slot** (`u32`), not a millisecond timeout. ReSell vs Mev vs TPU: same wire messages — tell them apart by which Relayer method accepted the stream. Details: [`p2c_server` README](../p2c_server/README.md#2-differentiating-resell-vs-mev-vs-tpu).
+`ExpiringPacketBatch.expiry_ms` holds the **working-bank slot** (`u32`), not a millisecond timeout. Mev vs Resell vs TPU: same wire messages — tell them apart by which Relayer method accepted the stream.
+
+- Sample definitions: [`p2c_server` README §2](../p2c_server/README.md#2-what-are-mev-resell-and-tpu-streams) · [root README](../README.md#p2c-streams-at-a-glance)
+- Official docs: [Post-Pack Confirmations](https://docs.rakurai.io/docs/services/rakurai_jito_private/rakurai_docs/transaction_inclusion/post_pack/readme) · [Setup guide §8.1](https://docs.rakurai.io/docs/services/rakurai_jito_private/rakurai_docs/transaction_inclusion/setup_guide#81-differentiating-scheduler-vs-tpu)

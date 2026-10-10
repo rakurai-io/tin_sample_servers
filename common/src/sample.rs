@@ -55,11 +55,11 @@ pub fn packet_bytes(packet: &Packet) -> &[u8] {
 
 /// Decode + log each P2C packet; returns the original packets (unchanged).
 ///
-/// `source` is `resell`, `mev`, or `tpu` (which gRPC stream delivered the batch).
+/// `source` is `mev`, `resell`, or `tpu` (which gRPC stream delivered the batch).
 /// `validator` is the identity from Relayer auth (bearer token). `expiry_ms` is the
 /// working-bank slot on the P2C path.
 ///
-/// On **resell** / **mev** streams, `meta.addr` is the per-tx postpack hash string (not an IP).
+/// On **mev** / **resell** streams, `meta.addr` is the per-tx postpack hash string (not an IP).
 /// On the **TPU** stream, `meta.addr` is the validator identity signature over the
 /// transaction-signature string — verified here and logged as `tpu_proof=ok|bad|…`.
 pub fn log_p2c_batch(

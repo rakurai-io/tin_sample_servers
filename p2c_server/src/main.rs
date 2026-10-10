@@ -3,7 +3,7 @@
 //! Exposes:
 //! - `auth.AuthService` with role `RELAYER`
 //! - `block_engine.BlockEngineValidator` (`GetBlockEngineEndpoints` for P2C autoconfig)
-//! - `block_engine.BlockEngineRelayer` (ReSell + Mev leader-time streams, optional TPU + count)
+//! - `block_engine.BlockEngineRelayer` (Mev + Resell leader-time streams, optional TPU + count)
 
 use {
     anyhow::Context,
