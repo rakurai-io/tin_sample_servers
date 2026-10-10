@@ -23,7 +23,7 @@
 
 Run one binary if you only need that path. One advertised URL for both paths needs Auth + Validator + Relayer on the same listener (or both samples behind one front door).
 
-**P2C access (production):** prepaid **[PSA](https://docs.rakurai.io/docs/services/rakurai_jito_private/rakurai_docs/transaction_inclusion/post_pack/psa)** for pre-conf / reselling (leader-time only), **or** **[MCA](https://docs.rakurai.io/docs/services/rakurai_jito_private/rakurai_docs/transaction_inclusion/post_pack/mca)** for backrun / MevShare (**PSA is included** in MCA; leader-time + TPU). The sample can expose both Relayer streams for testing either path.
+**P2C access (production):** prepaid **[PSA](https://docs.rakurai.io/docs/services/rakurai_jito_private/rakurai_docs/transaction_inclusion/post_pack/psa)** for pre-conf / reselling (ReSell leader-time only), **or** **[MCA](https://docs.rakurai.io/docs/services/rakurai_jito_private/rakurai_docs/transaction_inclusion/post_pack/mca)** for backrun / MevShare (**PSA is included** in MCA; Mev leader-time + optional TPU). Validators use **one** TLS connection per endpoint UUID and multiplex streams (`resell` → PacketStream, `mev` → MevPacketStream, TPU when flagged). This sample implements all Relayer RPCs for testing.
 
 ---
 
@@ -53,11 +53,12 @@ Edit `get_block_engine_endpoints` in [`bundles_server/src/main.rs`](./bundles_se
 
 | Relayer RPC | Default | Opt out | What it delivers |
 |-------------|---------|---------|------------------|
-| `StartExpiringPacketStream` | always on | — | Leader-time / post-pack (point of no return) |
-| `StartExpiringTpuPacketStream` | on | `--disable-tpu-packet-stream` | Non-leader TPU packets (**MCA** path in production) |
+| `StartExpiringPacketStream` | always on | — | ReSell leader-time / post-pack (no-boost hash; no TPU) |
+| `StartExpiringMevPacketStream` | always on | — | Mev leader-time / post-pack (boost hash) |
+| `StartExpiringTpuPacketStream` | on | `--disable-tpu-packet-stream` | Non-leader TPU packets (**MCA** + flag in production) |
 | `StartP2cUpdateCountStream` | on | `--disable-p2c-update-count` | Per-slot send counts on those streams |
 
-Tell scheduler vs TPU apart by **which gRPC method** delivered the message (no `source` field). Details: [`p2c_server` README](./p2c_server/README.md).
+Validators may open **resell**, **mev**, or **both** leader-time streams on the **same** connection (distinct `meta.addr` hashes). Tell streams apart by **which gRPC method** delivered the message (no `source` field). Details: [`p2c_server` README](./p2c_server/README.md).
 
 ---
 

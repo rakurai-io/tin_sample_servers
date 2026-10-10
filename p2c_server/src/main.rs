@@ -3,7 +3,7 @@
 //! Exposes:
 //! - `auth.AuthService` with role `RELAYER`
 //! - `block_engine.BlockEngineValidator` (`GetBlockEngineEndpoints` for P2C autoconfig)
-//! - `block_engine.BlockEngineRelayer` (`StartExpiringPacketStream`, optional TPU + count streams)
+//! - `block_engine.BlockEngineRelayer` (ReSell + Mev leader-time streams, optional TPU + count)
 
 use {
     anyhow::Context,
@@ -182,6 +182,8 @@ impl BlockEngineRelayer for BlockEngineRelayerImpl {
         ReceiverStream<Result<ProgramsOfInterestUpdate, Status>>;
     type StartExpiringPacketStreamStream =
         ReceiverStream<Result<StartExpiringPacketStreamResponse, Status>>;
+    type StartExpiringMevPacketStreamStream =
+        ReceiverStream<Result<StartExpiringPacketStreamResponse, Status>>;
     type StartExpiringTpuPacketStreamStream =
         ReceiverStream<Result<StartExpiringPacketStreamResponse, Status>>;
     type StartP2cUpdateCountStreamStream =
@@ -219,7 +221,26 @@ impl BlockEngineRelayer for BlockEngineRelayerImpl {
         &self,
         request: Request<Streaming<PacketBatchUpdate>>,
     ) -> Result<Response<Self::StartExpiringPacketStreamStream>, Status> {
-        serve_packet_stream(request, &self.tokens, "scheduler").await
+        serve_packet_stream(
+            request,
+            &self.tokens,
+            "StartExpiringPacketStream",
+            "resell",
+        )
+        .await
+    }
+
+    async fn start_expiring_mev_packet_stream(
+        &self,
+        request: Request<Streaming<PacketBatchUpdate>>,
+    ) -> Result<Response<Self::StartExpiringMevPacketStreamStream>, Status> {
+        serve_packet_stream(
+            request,
+            &self.tokens,
+            "StartExpiringMevPacketStream",
+            "mev",
+        )
+        .await
     }
 
     async fn start_expiring_tpu_packet_stream(
@@ -231,7 +252,13 @@ impl BlockEngineRelayer for BlockEngineRelayerImpl {
                 "StartExpiringTpuPacketStream disabled (--disable-tpu-packet-stream)",
             ));
         }
-        serve_packet_stream(request, &self.tokens, "tpu").await
+        serve_packet_stream(
+            request,
+            &self.tokens,
+            "StartExpiringTpuPacketStream",
+            "tpu",
+        )
+        .await
     }
 
     async fn start_p2c_update_count_stream(
@@ -289,13 +316,11 @@ impl BlockEngineRelayer for BlockEngineRelayerImpl {
 async fn serve_packet_stream(
     request: Request<Streaming<PacketBatchUpdate>>,
     tokens: &Arc<TokenStore>,
+    rpc_name: &'static str,
     source: &'static str,
 ) -> Result<Response<ReceiverStream<Result<StartExpiringPacketStreamResponse, Status>>>, Status> {
     let ctx = require_bearer(&request, tokens, Role::Relayer)?;
-    info!(
-        "P2C Server: StartExpiringPacketStream ({source}) from {}",
-        ctx.pubkey
-    );
+    info!("P2C Server: {rpc_name} ({source}) from {}", ctx.pubkey);
 
     let mut inbound = request.into_inner();
     let (tx, rx) = mpsc::channel(32);

@@ -18,10 +18,13 @@ Modules: `protos::auth`, `protos::block_engine`, …
 
 | RPC | Purpose |
 |-----|---------|
-| `StartExpiringPacketStream` | Leader-time / post-pack updates (required) |
-| `StartExpiringTpuPacketStream` | Non-leader TPU updates; optional (`UNIMPLEMENTED` ok). In production, **MCA** path (**PSA included**) |
+| `StartExpiringPacketStream` | ReSell leader-time / post-pack (no-boost hash). Validators open when `resell` is set. |
+| `StartExpiringMevPacketStream` | Mev leader-time / post-pack (boost hash). Validators open when `mev` is set. |
+| `StartExpiringTpuPacketStream` | Non-leader TPU updates; optional (`UNIMPLEMENTED` ok). Mev + `enable_tpu_p2c_update` in production. |
 | `StartP2cUpdateCountStream` | Per-slot send counts; optional (`UNIMPLEMENTED` ok) |
+
+One TLS connection per endpoint UUID may multiplex Packet + Mev streams (distinct `meta.addr` hashes) plus optional TPU.
 
 `P2cUpdateCount`: `uuid`, `slot`, `scheduler_count`, `tpu_count`, `total_count`, `p2c_tpu_enabled`.
 
-`ExpiringPacketBatch.expiry_ms` holds the **working-bank slot** (`u32`), not a millisecond timeout. Scheduler vs TPU: same wire messages — tell them apart by which Relayer method accepted the stream. Details: [`p2c_server` README](../p2c_server/README.md#2-differentiating-scheduler-vs-tpu).
+`ExpiringPacketBatch.expiry_ms` holds the **working-bank slot** (`u32`), not a millisecond timeout. ReSell vs Mev vs TPU: same wire messages — tell them apart by which Relayer method accepted the stream. Details: [`p2c_server` README](../p2c_server/README.md#2-differentiating-resell-vs-mev-vs-tpu).

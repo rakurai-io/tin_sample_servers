@@ -2,7 +2,7 @@
 
 **Purpose.** Sample Relayer so you can receive Rakurai post-pack (P2C) updates and decoding them before building a production consumer.
 
-**What it does.** Validators auth as `RELAYER`, open packet streams, and push transactions at the point of no return. This binary also serves `GetBlockEngineEndpoints` for region discovery. It logs each batch (validator, scheduler/tpu source, slot, signature, `meta.addr`) and verifies TPU `meta.addr` proofs. It does **not** send bundles — use [`bundles_server`](../bundles_server/) for that.
+**What it does.** Validators auth as `RELAYER`, open one or more packet streams on the same connection, and push transactions at the point of no return. This binary also serves `GetBlockEngineEndpoints` for region discovery. It logs each batch (validator, stream source, slot, signature, `meta.addr`) and verifies TPU `meta.addr` proofs. It does **not** send bundles — use [`bundles_server`](../bundles_server/) for that.
 
 ---
 
@@ -12,55 +12,58 @@
 |---------|------|------|
 | `auth.AuthService` | `RELAYER` | challenge / tokens |
 | `block_engine.BlockEngineValidator` | discovery | `GetBlockEngineEndpoints` (`SubscribePackets` / `SubscribeBundles` → `UNIMPLEMENTED`) |
-| `block_engine.BlockEngineRelayer` | `RELAYER` | scheduler, TPU, and count streams below |
+| `block_engine.BlockEngineRelayer` | `RELAYER` | leader-time, TPU, and count streams below |
 
 ### Streams (Relayer)
 
 | RPC | Default | Disable with | What it delivers |
 |-----|---------|--------------|------------------|
-| `StartExpiringPacketStream` | always on | — | Leader-time / post-pack (point of no return) |
+| `StartExpiringPacketStream` | always on | — | ReSell leader-time / post-pack (no-boost hash) |
+| `StartExpiringMevPacketStream` | always on | — | Mev leader-time / post-pack (boost hash) |
 | `StartExpiringTpuPacketStream` | **on** | `--disable-tpu-packet-stream` | Non-leader TPU packets |
 | `StartP2cUpdateCountStream` | **on** | `--disable-p2c-update-count` | Per-slot counts of txs sent on those streams |
 
-Disabled optional RPCs return `UNIMPLEMENTED`; newer validators keep the scheduler stream.
+Validators multiplex whichever streams their on-chain config enables (`resell`, `mev`, `enable_tpu_p2c_update`) on **one** TLS connection per endpoint UUID. Disabled optional RPCs return `UNIMPLEMENTED`; newer validators keep the leader-time stream(s) they need.
 
 **Production access (not enforced by this sample):**
 
-| Path | Payment | Streams you get |
-|------|---------|-----------------|
-| Pre-conf / reselling | **PSA** | Leader-time only |
-| Backrun / MevShare | **MCA** (**PSA included**) | Leader-time **+ TPU** |
+| Path | Payment | Streams validators open |
+|------|---------|-------------------------|
+| Pre-conf / reselling | **PSA** | `StartExpiringPacketStream` only |
+| Backrun / MevShare | **MCA** (**PSA included**) | `StartExpiringMevPacketStream` + optional TPU |
+| Both flags on one URL | PSA + MCA | Packet + Mev streams (distinct hashes); TPU only with Mev flag |
 
 For local PSA-style testing, run with `--disable-tpu-packet-stream` (and optionally `--disable-p2c-update-count`).
 
 ---
 
-## 2. Differentiating scheduler vs TPU
+## 2. Differentiating resell vs mev vs TPU
 
-**Purpose.** Know whether an update is leader-time post-pack or earlier TPU traffic.
+**Purpose.** Know whether an update is ReSell post-pack, Mev post-pack, or earlier TPU traffic.
 
-**What it does.** Both streams send the same `PacketBatchUpdate` type. There is no `source` field on the packet — use the gRPC method that delivered it.
+**What it does.** All streams send the same `PacketBatchUpdate` type. There is no `source` field on the packet — use the gRPC method that delivered it.
 
 ### 2.1. Primary — which gRPC method delivered the message
 
 | Stream | Sample log label | Meaning |
 |--------|------------------|---------|
-| `StartExpiringPacketStream` | `scheduler` | Post-pack / point of no return for this leader slot |
+| `StartExpiringPacketStream` | `resell` | ReSell post-pack / point of no return (no tip boost) |
+| `StartExpiringMevPacketStream` | `mev` | Mev post-pack / boost-eligible hash |
 | `StartExpiringTpuPacketStream` | `tpu` | TPU path (validator is not the leader) |
 
-The sample passes `"scheduler"` or `"tpu"` into `log_p2c_batch` from the accepting handler.
+The sample passes `resell`, `mev`, or `tpu` into `log_p2c_batch` from the accepting handler.
 
 ### 2.2. Secondary — `meta` on each packet
 
-| Field | Scheduler | TPU |
-|-------|-----------|-----|
+| Field | ReSell / Mev | TPU |
+|-------|--------------|-----|
 | `meta.size` | `data.len()` | `data.len()` |
-| `meta.addr` | Per-tx string from the scheduler (**not** an IP) | Validator identity signature over the tx-signature string |
+| `meta.addr` | Per-tx postpack hash string (**not** an IP) | Validator identity signature over the tx-signature string |
 | `meta.port` | `0` | `0` |
 | `meta.flags` | Omitted / unset | Omitted / unset |
 | `meta.sender_stake` | `0` | `0` |
 
-Treat `meta.addr` as opaque proof / correlation data — do not parse it as a socket address. When you reply with a bundle, put the original `Packet` **unchanged** (`data` + `meta`) first.
+Treat leader-time `meta.addr` as opaque correlation data — do not parse it as a socket address. When you reply with a bundle, put the original `Packet` **unchanged** (`data` + `meta`) first.
 
 ### 2.3. Which validator sent the update
 
@@ -72,10 +75,11 @@ Streams are authenticated. Logs include `validator=<identity pubkey>` from the b
 2. Parse `meta.addr` as a Solana `Signature` (base58).
 3. `proof.verify(validator_pubkey.as_ref(), txn_sig.as_bytes())`.
 
-Sample logs `tpu_proof=ok|bad|missing|bad_encoding`. Do **not** run this verify on scheduler `meta.addr`.
+Sample logs `tpu_proof=ok|bad|missing|bad_encoding`. Do **not** run this verify on ReSell/Mev `meta.addr`.
 
 ```text
-P2C-Update[scheduler]: validator=<pubkey> slot=… signature=<sig> meta.addr=<scheduler-string>
+P2C-Update[resell]: validator=<pubkey> slot=… signature=<sig> meta.addr=<resell-hash>
+P2C-Update[mev]: validator=<pubkey> slot=… signature=<sig> meta.addr=<mev-hash>
 P2C-Update[tpu]: validator=<pubkey> slot=… signature=<sig> meta.addr=<proof> tpu_proof=ok
 ```
 
@@ -103,7 +107,7 @@ expiry_ms = <slot as u32>
 |-------|---------|
 | `uuid` | Post-pack endpoint UUID |
 | `slot` | Slot these counts belong to |
-| `scheduler_count` | Txs sent on the scheduler stream that slot |
+| `scheduler_count` | Txs sent on leader-time streams (Packet + Mev) that slot |
 | `tpu_count` | Txs sent on the TPU stream that slot |
 | `total_count` | `scheduler_count + tpu_count` |
 | `p2c_tpu_enabled` | Whether TPU updates are enabled for this endpoint |
@@ -131,9 +135,9 @@ RUST_LOG=info cargo run --release -p p2c_server -- \
 | `--rpc-url` / `RPC_URL` | mainnet-beta | Leader allowlist |
 | `--allow-any-validator` | false | Skip allowlist (local only) |
 
-Register the discovery URL with Rakurai. Replace logging with your backrun / reply-bundle logic. Backrun bundles that use **leader-time source txs** get an additional **20% virtual priority** on Rakurai.
+Register the discovery URL with Rakurai. Replace logging with your backrun / reply-bundle logic. Backrun bundles that use **leader-time Mev source txs** get an additional **20% virtual priority** on Rakurai.
 
-### Example: leader-time only (PSA-style / no TPU)
+### Example: ReSell leader-time only (PSA-style / no TPU)
 
 ```bash
 RUST_LOG=info cargo run --release -p p2c_server -- \
@@ -142,3 +146,5 @@ RUST_LOG=info cargo run --release -p p2c_server -- \
   --disable-tpu-packet-stream \
   --disable-p2c-update-count
 ```
+
+(Mev validators still need `StartExpiringMevPacketStream`; this sample keeps that RPC enabled unless you fork the binary.)
