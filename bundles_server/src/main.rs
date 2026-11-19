@@ -10,7 +10,9 @@ use {
     clap::Parser,
     common::{
         AuthServiceImpl, LeaderScheduleCache, TokenStore, auth::require_bearer, make_dummy_bundle,
-        tokens::default_ttls, warn_if_bad_public_url,
+        TlsArgs, server_builder,
+        tokens::{PURGE_INTERVAL, default_ttls},
+        warn_if_bad_public_url,
     },
     log::{info, warn},
     protos::{
@@ -25,7 +27,7 @@ use {
     std::{net::SocketAddr, sync::Arc, time::Duration},
     tokio::sync::mpsc,
     tokio_stream::wrappers::ReceiverStream,
-    tonic::{Request, Response, Status, transport::Server},
+    tonic::{Request, Response, Status},
 };
 
 #[derive(Debug, Parser)]
@@ -57,6 +59,9 @@ struct Args {
     /// How often to refresh leader schedule + getClusterNodes.
     #[arg(long, default_value_t = 120)]
     leader_refresh_secs: u64,
+
+    #[command(flatten)]
+    tls: TlsArgs,
 }
 
 #[tokio::main]
@@ -66,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
 
     let (challenge_ttl, access_ttl, refresh_ttl) = default_ttls();
     let tokens = Arc::new(TokenStore::new(challenge_ttl, access_ttl, refresh_ttl));
+    tokens.spawn_purge_task(PURGE_INTERVAL);
     let leaders = LeaderScheduleCache::new(
         args.rpc_url.clone(),
         args.allow_any_validator,
@@ -84,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
         "Bundle Server: bundles_server listening on {} public_url={}",
         args.bind, args.public_url
     );
-    Server::builder()
+    server_builder(&args.tls, &args.public_url)?
         .add_service(AuthServiceServer::new(auth))
         .add_service(BlockEngineValidatorServer::new(validator))
         .serve(args.bind)
@@ -140,7 +146,13 @@ impl BlockEngineValidator for BlockEngineValidatorImpl {
                 if tx.is_closed() {
                     break;
                 }
-                match make_dummy_bundle(&rpc_url) {
+                // make_dummy_bundle does a blocking RPC call; keep it off the async workers.
+                let rpc = rpc_url.clone();
+                let built = match tokio::task::spawn_blocking(move || make_dummy_bundle(&rpc)).await {
+                    Ok(res) => res,
+                    Err(err) => Err(anyhow::anyhow!("dummy bundle task panicked: {err}")),
+                };
+                match built {
                     Ok((bundle, sig)) => {
                         info!(
                             "Bundle Server: SubscribeBundles sending dummy tip tx signature={sig} uuid={}",

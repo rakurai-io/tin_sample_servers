@@ -588,6 +588,7 @@ dependencies = [
  "bincode",
  "bs58",
  "chrono",
+ "clap",
  "dashmap",
  "log",
  "prost-types",
@@ -2387,6 +2388,7 @@ version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
@@ -4199,6 +4201,7 @@ dependencies = [
  "socket2",
  "sync_wrapper",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tower",
  "tower-layer",

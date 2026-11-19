@@ -120,10 +120,15 @@ service BlockEngineRelayer {
 
   rpc SubscribeProgramsOfInterest (ProgramsOfInterestRequest) returns (stream ProgramsOfInterestUpdate) {}
 
-  // Scheduler / post-pack updates (bi-directional for Envoy half-close workaround).
+  // Resell / PSA leader-time post-pack (no-boost hash). Validators open when `resell` is set.
+  // Same connection may also open MevPacketStream when `mev` is set (distinct hashes).
   rpc StartExpiringPacketStream (stream PacketBatchUpdate) returns (stream StartExpiringPacketStreamResponse) {}
 
-  // TPU / sigverify packets (same message types). Optional: return UNIMPLEMENTED to disable.
+  // Mev / MCA leader-time post-pack (boost-eligible hash). Validators open when `mev` is set.
+  rpc StartExpiringMevPacketStream (stream PacketBatchUpdate) returns (stream StartExpiringPacketStreamResponse) {}
+
+  // TPU non-leader transaction stream for backrun (MCA + enable_tpu; not front-run proof).
+  // Optional: return UNIMPLEMENTED to disable. Do not resell these updates.
   rpc StartExpiringTpuPacketStream (stream PacketBatchUpdate) returns (stream StartExpiringPacketStreamResponse) {}
 
   // Per-slot send counts. Optional: return UNIMPLEMENTED to disable.
