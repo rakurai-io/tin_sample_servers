@@ -3,10 +3,11 @@
 use {
     chrono::Utc,
     dashmap::DashMap,
+    log::debug,
     protos::auth::{Role, Token},
     prost_types::Timestamp,
     solana_pubkey::Pubkey,
-    std::time::Duration,
+    std::{sync::Arc, time::Duration},
     uuid::Uuid,
 };
 
@@ -96,6 +97,34 @@ impl TokenStore {
         Some(entry.ctx.clone())
     }
 
+    /// Drop expired challenges and tokens. Returns how many entries were removed.
+    pub fn purge_expired(&self) -> usize {
+        let now = Utc::now().timestamp();
+        let before = self.challenges.len() + self.access.len() + self.refresh.len();
+        self.challenges.retain(|_, e| e.expires_at >= now);
+        self.access.retain(|_, t| t.expires_at >= now);
+        self.refresh.retain(|_, t| t.expires_at >= now);
+        before - (self.challenges.len() + self.access.len() + self.refresh.len())
+    }
+
+    /// Spawn a background task that calls [`Self::purge_expired`] every `every`.
+    /// Must be called from inside a tokio runtime.
+    pub fn spawn_purge_task(self: &Arc<Self>, every: Duration) {
+        let store = Arc::downgrade(self);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(every);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                let Some(store) = store.upgrade() else { break };
+                let removed = store.purge_expired();
+                if removed > 0 {
+                    debug!("TokenStore: purged {removed} expired challenges/tokens");
+                }
+            }
+        });
+    }
+
     fn mint(
         &self,
         map: &DashMap<String, IssuedToken>,
@@ -120,6 +149,9 @@ impl TokenStore {
         }
     }
 }
+
+/// How often the samples sweep expired challenges/tokens out of memory.
+pub const PURGE_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Convenience TTLs used by the samples.
 pub fn default_ttls() -> (Duration, Duration, Duration) {

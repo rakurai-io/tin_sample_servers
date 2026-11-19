@@ -18,14 +18,14 @@
 
 ### Streams (Relayer)
 
-| RPC | Default | Disable with | Stream name | What it delivers |
-|-----|---------|--------------|-------------|------------------|
-| `StartExpiringMevPacketStream` | always on | — | **Mev** | Leader-time pre-conf for backrun (boost-eligible) |
-| `StartExpiringPacketStream` | always on | — | **Resell** | Leader-time pre-conf for reselling (no boost) |
-| `StartExpiringTpuPacketStream` | **on** | `--disable-tpu-packet-stream` | **TPU** | Non-leader transaction stream for backrun (not front-run proof) |
-| `StartP2cUpdateCountStream` | **on** | `--disable-p2c-update-count` | Count | Per-slot counts of txs sent on those streams |
+| RPC | Default | Enable with | Stream name | What it delivers |
+|-----|---------|-------------|-------------|------------------|
+| `StartExpiringPacketStream` | **always on** | — | **Resell** | Leader-time pre-conf for reselling (no boost) |
+| `StartExpiringMevPacketStream` | off | `--enable-mev-packet-stream` | **Mev** | Leader-time pre-conf for backrun (boost-eligible) |
+| `StartExpiringTpuPacketStream` | off | `--enable-tpu-packet-stream` | **TPU** | Non-leader transaction stream for backrun (not front-run proof) |
+| `StartP2cUpdateCountStream` | off | `--enable-p2c-update-count` | Count | Per-slot counts of txs sent on those streams |
 
-Validators multiplex whichever streams their on-chain config enables (`mev`, `resell`, `enable_tpu_p2c_update`) on **one** TLS connection per endpoint UUID. Disabled optional RPCs return `UNIMPLEMENTED`; newer validators keep the leader-time stream(s) they need.
+Validators multiplex whichever streams their on-chain config enables (`mev`, `resell`, `enable_tpu_p2c_update`) on **one** TLS connection per endpoint UUID. RPCs that are not enabled return `UNIMPLEMENTED`; newer validators keep the leader-time stream(s) they need.
 
 **Production access (not enforced by this sample):**
 
@@ -34,7 +34,7 @@ Validators multiplex whichever streams their on-chain config enables (`mev`, `re
 | Backrun / MevShare | **[MCA](https://docs.rakurai.io/docs/services/rakurai_jito_private/rakurai_docs/transaction_inclusion/post_pack/mca)** | Mev stream + optional TPU |
 | Resell pre-conf | **[PSA](https://docs.rakurai.io/docs/services/rakurai_jito_private/rakurai_docs/transaction_inclusion/post_pack/psa)** | Resell stream only |
 
-For local Resell-only testing, run with `--disable-tpu-packet-stream` (and optionally `--disable-p2c-update-count`).
+The default is Resell-only. For the MCA / backrun path, add `--enable-mev-packet-stream` (and optionally `--enable-tpu-packet-stream`, `--enable-p2c-update-count`).
 
 ---
 
@@ -186,21 +186,34 @@ RUST_LOG=info cargo run --release -p p2c_server -- \
 |------|---------|---------|
 | `--bind` | `0.0.0.0:10001` | gRPC listen address |
 | `--public-url` | `http://127.0.0.1:10001` | Returned by discovery (use a **public** URL for real validators) |
-| `--disable-tpu-packet-stream` | off | Reject TPU stream |
-| `--disable-p2c-update-count` | off | Reject count stream |
+| `--enable-mev-packet-stream` | off | Accept Mev stream |
+| `--enable-tpu-packet-stream` | off | Accept TPU stream |
+| `--enable-p2c-update-count` | off | Accept count stream |
+| `--tls-cert` / `--tls-key` (`TLS_CERT` / `TLS_KEY`) | unset (no TLS) | PEM cert + key; set both to serve TLS (use an `https://` public URL) |
 | `--rpc-url` / `RPC_URL` | mainnet-beta | Leader allowlist |
 | `--allow-any-validator` | false | Skip allowlist (local only) |
 
 Register the discovery URL with Rakurai. Replace logging with your backrun / reply-bundle logic. Reply bundles that include the original Mev packet get an additional **20% virtual priority** on Rakurai — see [§2.1](#21-mev-stream) and [Tips](https://docs.rakurai.io/docs/services/rakurai_jito_private/rakurai_docs/transaction_inclusion/tips).
 
-### Example: Resell leader-time only (PSA-style / no TPU)
+### Example: Mev + TPU + counts (MCA / backrun)
+
+The default command above is Resell-only (PSA). To accept every stream:
 
 ```bash
 RUST_LOG=info cargo run --release -p p2c_server -- \
   --bind 0.0.0.0:10001 \
   --public-url http://<HOST_IP>:10001 \
-  --disable-tpu-packet-stream \
-  --disable-p2c-update-count
+  --enable-mev-packet-stream \
+  --enable-tpu-packet-stream \
+  --enable-p2c-update-count
 ```
 
-(Mev validators still need `StartExpiringMevPacketStream`; this sample keeps that RPC enabled unless you fork the binary.)
+### Example: TLS
+
+```bash
+RUST_LOG=info cargo run --release -p p2c_server -- \
+  --bind 0.0.0.0:10001 \
+  --public-url https://<HOST>:10001 \
+  --tls-cert /path/fullchain.pem \
+  --tls-key /path/privkey.pem
+```

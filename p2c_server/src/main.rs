@@ -3,14 +3,16 @@
 //! Exposes:
 //! - `auth.AuthService` with role `RELAYER`
 //! - `block_engine.BlockEngineValidator` (`GetBlockEngineEndpoints` for P2C autoconfig)
-//! - `block_engine.BlockEngineRelayer` (Mev + Resell leader-time streams, optional TPU + count)
+//! - `block_engine.BlockEngineRelayer` (Resell always on; Mev, TPU, count opt-in via `--enable-*`)
 
 use {
     anyhow::Context,
     clap::Parser,
     common::{
         AuthServiceImpl, LeaderScheduleCache, TokenStore, auth::require_bearer, log_p2c_batch,
-        tokens::default_ttls, warn_if_bad_public_url,
+        TlsArgs, server_builder,
+        tokens::{PURGE_INTERVAL, default_ttls},
+        warn_if_bad_public_url,
     },
     log::{info, warn},
     protos::{
@@ -30,7 +32,7 @@ use {
     std::{net::SocketAddr, sync::Arc, time::Duration},
     tokio::sync::mpsc,
     tokio_stream::{StreamExt, wrappers::ReceiverStream},
-    tonic::{Request, Response, Status, Streaming, transport::Server},
+    tonic::{Request, Response, Status, Streaming},
 };
 
 #[derive(Debug, Parser)]
@@ -63,13 +65,20 @@ struct Args {
     #[arg(long, default_value_t = 120)]
     leader_refresh_secs: u64,
 
-    /// Disable StartExpiringTpuPacketStream (enabled by default).
-    #[arg(long, default_value_t = false)]
-    disable_tpu_packet_stream: bool,
+    #[command(flatten)]
+    tls: TlsArgs,
 
-    /// Disable StartP2cUpdateCountStream (enabled by default).
+    /// Accept StartExpiringMevPacketStream (Mev / MCA). Off by default.
     #[arg(long, default_value_t = false)]
-    disable_p2c_update_count: bool,
+    enable_mev_packet_stream: bool,
+
+    /// Accept StartExpiringTpuPacketStream (TPU / MCA). Off by default.
+    #[arg(long, default_value_t = false)]
+    enable_tpu_packet_stream: bool,
+
+    /// Accept StartP2cUpdateCountStream (per-slot counts). Off by default.
+    #[arg(long, default_value_t = false)]
+    enable_p2c_update_count: bool,
 }
 
 #[tokio::main]
@@ -79,6 +88,7 @@ async fn main() -> anyhow::Result<()> {
 
     let (challenge_ttl, access_ttl, refresh_ttl) = default_ttls();
     let tokens = Arc::new(TokenStore::new(challenge_ttl, access_ttl, refresh_ttl));
+    tokens.spawn_purge_task(PURGE_INTERVAL);
     let leaders = LeaderScheduleCache::new(
         args.rpc_url.clone(),
         args.allow_any_validator,
@@ -91,19 +101,22 @@ async fn main() -> anyhow::Result<()> {
     };
     let relayer = BlockEngineRelayerImpl {
         tokens,
-        enable_tpu_packet_stream: !args.disable_tpu_packet_stream,
-        enable_p2c_update_count: !args.disable_p2c_update_count,
+        enable_mev_packet_stream: args.enable_mev_packet_stream,
+        enable_tpu_packet_stream: args.enable_tpu_packet_stream,
+        enable_p2c_update_count: args.enable_p2c_update_count,
     };
 
     warn_if_bad_public_url(&args.public_url);
     info!(
-        "P2C Server: listening on {} public_url={} tpu_stream={} update_count={}",
+        "P2C Server: listening on {} public_url={} resell_stream=true mev_stream={} \
+         tpu_stream={} update_count={}",
         args.bind,
         args.public_url,
-        !args.disable_tpu_packet_stream,
-        !args.disable_p2c_update_count
+        args.enable_mev_packet_stream,
+        args.enable_tpu_packet_stream,
+        args.enable_p2c_update_count
     );
-    Server::builder()
+    server_builder(&args.tls, &args.public_url)?
         .add_service(AuthServiceServer::new(auth))
         .add_service(BlockEngineValidatorServer::new(validator))
         .add_service(BlockEngineRelayerServer::new(relayer))
@@ -170,6 +183,7 @@ impl BlockEngineValidator for BlockEngineValidatorImpl {
 
 struct BlockEngineRelayerImpl {
     tokens: Arc<TokenStore>,
+    enable_mev_packet_stream: bool,
     enable_tpu_packet_stream: bool,
     enable_p2c_update_count: bool,
 }
@@ -234,6 +248,11 @@ impl BlockEngineRelayer for BlockEngineRelayerImpl {
         &self,
         request: Request<Streaming<PacketBatchUpdate>>,
     ) -> Result<Response<Self::StartExpiringMevPacketStreamStream>, Status> {
+        if !self.enable_mev_packet_stream {
+            return Err(Status::unimplemented(
+                "StartExpiringMevPacketStream disabled (pass --enable-mev-packet-stream)",
+            ));
+        }
         serve_packet_stream(
             request,
             &self.tokens,
@@ -249,7 +268,7 @@ impl BlockEngineRelayer for BlockEngineRelayerImpl {
     ) -> Result<Response<Self::StartExpiringTpuPacketStreamStream>, Status> {
         if !self.enable_tpu_packet_stream {
             return Err(Status::unimplemented(
-                "StartExpiringTpuPacketStream disabled (--disable-tpu-packet-stream)",
+                "StartExpiringTpuPacketStream disabled (pass --enable-tpu-packet-stream)",
             ));
         }
         serve_packet_stream(
@@ -267,7 +286,7 @@ impl BlockEngineRelayer for BlockEngineRelayerImpl {
     ) -> Result<Response<Self::StartP2cUpdateCountStreamStream>, Status> {
         if !self.enable_p2c_update_count {
             return Err(Status::unimplemented(
-                "StartP2cUpdateCountStream disabled (--disable-p2c-update-count)",
+                "StartP2cUpdateCountStream disabled (pass --enable-p2c-update-count)",
             ));
         }
 

@@ -59,12 +59,12 @@ Edit `get_block_engine_endpoints` in [`bundles_server/src/main.rs`](./bundles_se
 
 `p2c_server` implements `GetBlockEngineEndpoints` (subscribe RPCs stay `UNIMPLEMENTED`). Same `--public-url` idea. Then Relayer streams:
 
-| Relayer RPC | Default | Opt out | Stream | What it delivers |
-|-------------|---------|---------|--------|------------------|
-| `StartExpiringMevPacketStream` | always on | — | Mev | Leader-time pre-conf for backrun (boost-eligible) |
+| Relayer RPC | Default | Opt in | Stream | What it delivers |
+|-------------|---------|--------|--------|------------------|
 | `StartExpiringPacketStream` | always on | — | Resell | Leader-time pre-conf for reselling (no boost; no TPU) |
-| `StartExpiringTpuPacketStream` | on | `--disable-tpu-packet-stream` | TPU | Non-leader transaction stream for backrun (**MCA**; not front-run proof) |
-| `StartP2cUpdateCountStream` | on | `--disable-p2c-update-count` | Count | Per-slot send counts on those streams |
+| `StartExpiringMevPacketStream` | off | `--enable-mev-packet-stream` | Mev | Leader-time pre-conf for backrun (boost-eligible) |
+| `StartExpiringTpuPacketStream` | off | `--enable-tpu-packet-stream` | TPU | Non-leader transaction stream for backrun (**MCA**; not front-run proof) |
+| `StartP2cUpdateCountStream` | off | `--enable-p2c-update-count` | Count | Per-slot send counts on those streams |
 
 Validators may open **Mev**, **Resell**, or **both** leader-time streams on the **same** connection (distinct `meta.addr` hashes). Tell streams apart by **which gRPC method** delivered the message (no `source` field). Details: [`p2c_server` README §2](./p2c_server/README.md#2-what-are-mev-resell-and-tpu-streams) · [docs.rakurai.io §8.1](https://docs.rakurai.io/docs/services/rakurai_jito_private/rakurai_docs/transaction_inclusion/setup_guide#81-differentiating-scheduler-vs-tpu).
 
@@ -114,8 +114,10 @@ Before sharing a URL, check discovery **and** auth on each host — see [Setup g
 | `--rpc-url` (`RPC_URL`) | mainnet-beta public RPC | all | Allowlist + latest blockhash |
 | `--leader-refresh-secs` | `120` | all | Allowlist refresh interval |
 | `--allow-any-validator` | false | all | Skip allowlist (local / lab only) |
-| `--disable-tpu-packet-stream` | false | `p2c_server` | Reject TPU Relayer RPC (`UNIMPLEMENTED`) |
-| `--disable-p2c-update-count` | false | `p2c_server` | Reject per-slot count Relayer RPC (`UNIMPLEMENTED`) |
+| `--tls-cert` / `--tls-key` (`TLS_CERT` / `TLS_KEY`) | unset (no TLS) | both servers | PEM cert + key; set both to serve TLS (then use an `https://` `--public-url`) |
+| `--enable-mev-packet-stream` | false | `p2c_server` | Accept Mev Relayer RPC (otherwise `UNIMPLEMENTED`) |
+| `--enable-tpu-packet-stream` | false | `p2c_server` | Accept TPU Relayer RPC (otherwise `UNIMPLEMENTED`) |
+| `--enable-p2c-update-count` | false | `p2c_server` | Accept per-slot count Relayer RPC (otherwise `UNIMPLEMENTED`) |
 
 ---
 

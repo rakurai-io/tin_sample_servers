@@ -11,6 +11,7 @@ anyhow = { workspace = true }
 bincode = { workspace = true }
 bs58 = { workspace = true }
 chrono = { workspace = true, features = ["clock"] }
+clap = { workspace = true }
 dashmap = { workspace = true }
 log = { workspace = true }
 prost-types = { workspace = true }
@@ -26,5 +27,5 @@ solana-signer = { workspace = true }
 solana-system-interface = { workspace = true }
 solana-transaction = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
-tonic = { workspace = true }
+tonic = { workspace = true, features = ["tls-ring"] }
 uuid = { workspace = true }
